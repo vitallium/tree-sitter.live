@@ -1,25 +1,89 @@
-#!/usr/bin/env bash
-set -euo pipefail
-IFS=$'\n\t'
+#!/usr/bin/env ruby
+# frozen_string_literal: true
 
-# This script is a way to set up and keep your development environment updated
-# automatically. It is meant to be idempotent so that you can run it at any
-# time to get the same result. Add any new necessary setup steps to this file
-# as your application evolves.
+# Based on https://github.com/mattbrictson/nextgen/blob/main/examples/all/bin/setup
 
-announce() {
-  local bold='\033[1m'
-  local reset='\033[0m'
-  printf "${bold}${1}${reset}\n"
-}
+# This script is a way to set up or update your development environment automatically.
+# This script is idempotent, so that you can run it at any time and get an expectable outcome.
+# Add necessary setup steps to this method.
+def setup!
+  env ".env", from: ".env.sample"
+  run "bundle install" if bundle_needed?
+  run "bin/hanami db prepare"
+  run install_node_packages_command if node_present?
 
-announce "Running bundle install..."
-bundle check || bundle install
+  say_status :Ready!,
+    "Use #{colorize("bin/dev", :yellow)} to start the app, " \
+    "or #{colorize("bin/rake", :yellow)} to run tests"
+end
 
-announce "\nRunning npm install..."
-npm install
+def run(command, echo: true, silent: false, exception: true)
+  say_status(:run, command, :blue) if echo
+  with_original_bundler_env do
+    options = silent ? {out: File::NULL, err: File::NULL} : {}
+    system(command, exception:, **options)
+  end
+end
 
-announce "\nPreparing the database..."
-hanami db prepare
+def bundle_needed?
+  !run("bundle check", silent: true, exception: false)
+end
 
-announce "\n🌸 Setup complete!"
+def node_present?
+  File.exist?("package.json")
+end
+
+def install_node_packages_command
+  if File.exist?("yarn.lock")
+    "yarn install --check-files"
+  else
+    "npm install"
+  end
+end
+
+def with_original_bundler_env(&)
+  return yield unless defined?(Bundler)
+
+  Bundler.with_original_env(&)
+end
+
+def env(env_file, from:)
+  return unless File.exist?(from)
+
+  unless File.exist?(env_file)
+    say_status(:copy, "#{from} → #{env_file}", :magenta)
+    require "fileutils"
+    FileUtils.cp(from, env_file)
+  end
+
+  keys = ->(f) { File.readlines(f).filter_map { |l| l[/^([^#\s][^=\s]*)/, 1] } }
+
+  missing = keys[from] - keys[env_file]
+  return if missing.empty?
+
+  say_status(:WARNING, "Your #{env_file} file is missing #{missing.join(", ")}. Refer to #{from} for details.", :red)
+end
+
+def say_status(label, message, color = :green)
+  label = label.to_s.rjust(12)
+  puts [colorize(label, color), message.gsub(/^/, " " * 13).strip].join(" ")
+end
+
+def colorize(str, color)
+  return str unless color_supported?
+
+  code = {red: 31, green: 32, yellow: 33, blue: 34, magenta: 35}.fetch(color)
+  "\e[0;#{code};49m#{str}\e[0m"
+end
+
+def color_supported?
+  if ENV["TERM"] == "dumb" || !ENV["NO_COLOR"].to_s.empty?
+    false
+  else
+    [$stdout, $stderr].all? { |io| io.respond_to?(:tty?) && io.tty? }
+  end
+end
+
+Dir.chdir(File.expand_path("..", __dir__)) do
+  setup!
+end
