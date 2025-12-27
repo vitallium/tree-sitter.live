@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'spec_helper'
+
 RSpec.describe Playground::Actions::Grammars::Index do
   let(:params) { {} }
 
